@@ -1,0 +1,11 @@
+update:
+  name: Update Frame Art
+  description: Push a random image with overlay to the Samsung Frame TV.
+  fields:
+    image_path:
+      name: Image Path
+      description: Optional path to a specific image. If omitted, a random image from the configured media folder is used.
+      required: false
+      example: /media/frame/my_photo.jpg
+      selector:
+        text:

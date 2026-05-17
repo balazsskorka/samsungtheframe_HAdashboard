@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Samsung Frame Art",
+        "description": "Configure your Samsung Frame TV art pusher with overlay.",
+        "data": {
+          "tv_ip": "Samsung Frame TV IP Address",
+          "media_folder": "Media Folder Path (e.g. /media/frame)",
+          "token_file": "Token File Path (e.g. /config/samsung_frame_token.txt)",
+          "calendar_entity": "Calendar Entity ID (e.g. calendar.family_2026)",
+          "language": "Overlay Language",
+          "upcoming_days": "Show events for how many days ahead?"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to TV. Check IP and ensure TV is on.",
+      "no_images": "No images found in the specified media folder.",
+      "invalid_path": "Media folder path does not exist."
+    },
+    "abort": {
+      "already_configured": "Samsung Frame is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Samsung Frame Art Options",
+        "data": {
+          "tv_ip": "TV IP Address",
+          "media_folder": "Media Folder Path",
+          "calendar_entity": "Calendar Entity ID",
+          "language": "Overlay Language",
+          "upcoming_days": "Days ahead for calendar events",
+          "matte_color": "Matte Style"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "domain": "samsung_frame",
+  "name": "Samsung Frame Art",
+  "version": "1.0.2",
+  "documentation": "https://github.com/your-repo/samsung_frame",
+  "issue_tracker": "https://github.com/your-repo/samsung_frame/issues",
+  "requirements": [
+    "Pillow>=10.0.0"
+  ],
+  "dependencies": [],
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "local_push"
+}
