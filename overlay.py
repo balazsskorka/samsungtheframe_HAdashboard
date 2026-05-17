@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import logging
-from datetime import date, timedelta, datetime
+from datetime import date, datetime
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -34,6 +35,30 @@ FONT_PATHS_REGULAR = [
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 
+# Regex to strip emoji and other non-Latin symbols that DejaVu can't render
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F700-\U0001F77F"  # alchemical
+    "\U0001F780-\U0001F7FF"  # geometric extended
+    "\U0001F800-\U0001F8FF"  # supplemental arrows
+    "\U0001F900-\U0001F9FF"  # supplemental symbols
+    "\U0001FA00-\U0001FA6F"  # chess symbols
+    "\U0001FA70-\U0001FAFF"  # symbols extended-A
+    "\U00002702-\U000027B0"  # dingbats
+    "\U000024C2-\U0001F251"  # enclosed chars
+    "\U0000200D"             # ZWJ
+    "\U0000FE0F"             # variation selector
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_RE.sub("", text).strip()
+
 
 def _find_font(paths):
     for p in paths:
@@ -48,7 +73,7 @@ def _font(path, size):
             return ImageFont.truetype(path, size)
         except Exception:
             pass
-    _LOGGER.warning("Font not found, falling back to default — text will be tiny!")
+    _LOGGER.warning("Font not found — text will render tiny")
     return ImageFont.load_default()
 
 
@@ -83,12 +108,28 @@ def _format_event_label(d: date, lang: str) -> str:
     return f"{day_names[d.weekday()]}, {month_names[d.month-1]} {d.day}"
 
 
+def _format_event_time(ev: dict, lang: str) -> str:
+    """Return a time string for the event, or empty string for all-day events."""
+    if ev.get("all_day"):
+        return ""
+    start = ev.get("start")
+    end = ev.get("end")
+    if not isinstance(start, datetime):
+        return ""
+    time_str = start.strftime("%H:%M")
+    if end and isinstance(end, datetime):
+        time_str += f" – {end.strftime('%H:%M')}"
+    return time_str
+
+
 def compose_overlay(
     image_path: str,
     lang: str,
     events: list[dict],
     opacity: int = 50,
+    font_size: int = 100,
 ) -> bytes:
+    """Compose image with overlay. opacity: 0-100, font_size: 50-200 (percent)."""
     img = Image.open(image_path).convert("RGBA")
     img = img.resize((3840, 2160), Image.LANCZOS)
     w, h = img.size
@@ -96,17 +137,15 @@ def compose_overlay(
     bold_path    = _find_font(FONT_PATHS_BOLD)
     regular_path = _find_font(FONT_PATHS_REGULAR)
 
-    _LOGGER.info("Using bold font: %s", bold_path)
-    _LOGGER.info("Using regular font: %s", regular_path)
-
     alpha = int(opacity / 100 * 255)
+    scale = font_size / 100.0
 
-    # ── Font sizes — large enough to read from 3+ metres ─────────────────────
-    fs_day_name    = 160   # "SATURDAY"
-    fs_date_big    = 320   # "17"
-    fs_month_year  = 130   # "May 2026"
-    fs_event_label = 90    # "TODAY" / "TOMORROW"
-    fs_event_title = 120   # event summary
+    # ── Font sizes scaled by user preference ─────────────────────────────────
+    fs_day_name    = int(160 * scale)
+    fs_date_big    = int(320 * scale)
+    fs_month_year  = int(130 * scale)
+    fs_event_label = int(90  * scale)
+    fs_event_title = int(120 * scale)
 
     font_day_name    = _font(regular_path, fs_day_name)
     font_date_big    = _font(bold_path,    fs_date_big)
@@ -120,7 +159,7 @@ def compose_overlay(
     radius   = 50
 
     left_w       = int(w * 0.38)
-    left_panel_h = int(h * 0.40)   # ~40% height for date block
+    left_panel_h = int(h * 0.40)
     left_x       = margin
     left_y       = margin
 
@@ -129,7 +168,6 @@ def compose_overlay(
     right_y = margin
     right_h = h - margin * 2
 
-    # ── Draw panels ───────────────────────────────────────────────────────────
     left_panel  = _rounded_frosted_panel(img, left_x, left_y, left_w, left_panel_h, radius, alpha)
     right_panel = _rounded_frosted_panel(img, right_x, right_y, right_w, right_h, radius, alpha)
 
@@ -173,7 +211,7 @@ def compose_overlay(
     ev_max_x  = right_x + right_w - ev_pad
     ev_bottom = right_y + right_h - ev_pad
     block_h   = fs_event_label + 14 + fs_event_title
-    row_gap   = 50
+    row_gap   = int(50 * scale)
 
     if not events:
         no_ev = NO_EVENTS_LABEL.get(lang, "No upcoming events")
@@ -183,19 +221,26 @@ def compose_overlay(
         for i, ev in enumerate(events):
             if ev_y + block_h > ev_bottom:
                 break
-            start  = ev.get("start")
+
+            start   = ev.get("start")
             ev_date = start.date() if hasattr(start, "date") else start
             label   = _format_event_label(ev_date, lang).upper()
-            summary = ev.get("summary", "")
+            summary = _strip_emoji(ev.get("summary", ""))
             if len(summary) > max_chars:
                 summary = summary[:max_chars - 1] + "…"
 
-            # Dot
+            # Dot accent
             dot_x = ev_x - 40
             dot_y = ev_y + fs_event_label + 14 + fs_event_title // 2
             draw.ellipse([(dot_x - 10, dot_y - 10), (dot_x + 10, dot_y + 10)], fill=WHITE_DIM)
 
+            # Label row: date label left, time right
             draw.text((ev_x, ev_y), label, font=font_event_label, fill=WHITE_DIM)
+            time_str = _format_event_time(ev, lang)
+            if time_str:
+                tw_t, _ = _text_size(draw, time_str, font_event_label)
+                draw.text((ev_max_x - tw_t, ev_y), time_str, font=font_event_label, fill=WHITE_DIM)
+
             draw.text((ev_x, ev_y + fs_event_label + 14), summary, font=font_event_title, fill=WHITE)
 
             ev_y += block_h + row_gap
@@ -205,5 +250,4 @@ def compose_overlay(
 
     out = io.BytesIO()
     img.convert("RGB").save(out, format="JPEG", quality=88, optimize=True)
-    _LOGGER.debug("Overlay JPEG: %d bytes", out.tell())
     return out.getvalue()

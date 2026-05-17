@@ -12,6 +12,7 @@ CONF_UPCOMING_DAYS = "upcoming_days"
 CONF_MATTE_COLOR = "matte_color"
 CONF_OVERLAY_OPACITY = "overlay_opacity"
 CONF_DEBUG_SAVE = "debug_save"
+CONF_FONT_SIZE = "font_size"
 
 # Defaults
 DEFAULT_MEDIA_FOLDER = "/media/frame"
@@ -20,6 +21,7 @@ DEFAULT_UPCOMING_DAYS = 5
 DEFAULT_MATTE_COLOR = "modern_apricot"
 DEFAULT_OVERLAY_OPACITY = 50  # percent 0-100
 DEFAULT_DEBUG_SAVE = False
+DEFAULT_FONT_SIZE = 100  # percent, 50-200
 DEFAULT_LANGUAGE = "en"
 
 # Supported languages

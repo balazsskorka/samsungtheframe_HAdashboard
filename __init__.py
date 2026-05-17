@@ -5,7 +5,6 @@ import logging
 import os
 import random
 import json
-import socket
 import ssl
 import uuid
 import base64
@@ -14,7 +13,7 @@ from datetime import date, datetime, timedelta
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -28,16 +27,20 @@ from .const import (
     CONF_MATTE_COLOR,
     CONF_OVERLAY_OPACITY,
     CONF_DEBUG_SAVE,
+    CONF_FONT_SIZE,
     DEFAULT_UPCOMING_DAYS,
     DEFAULT_MATTE_COLOR,
     DEFAULT_LANGUAGE,
     DEFAULT_OVERLAY_OPACITY,
     DEFAULT_DEBUG_SAVE,
+    DEFAULT_FONT_SIZE,
     SERVICE_UPDATE,
 )
 from .overlay import compose_overlay
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = ["button", "image", "number", "switch"]
 
 SERVICE_UPDATE_SCHEMA = vol.Schema({
     vol.Optional("image_path"): cv.string,
@@ -48,6 +51,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Samsung Frame Art from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = entry
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def handle_update(call: ServiceCall) -> None:
         config = {**entry.data, **entry.options}
@@ -60,8 +65,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         upcoming_days   = int(config.get(CONF_UPCOMING_DAYS, DEFAULT_UPCOMING_DAYS))
         matte           = config.get(CONF_MATTE_COLOR, DEFAULT_MATTE_COLOR)
         opacity         = int(config.get(CONF_OVERLAY_OPACITY, DEFAULT_OVERLAY_OPACITY))
-        debug_save      = bool(config.get(CONF_DEBUG_SAVE, DEFAULT_DEBUG_SAVE))
         image_path      = call.data.get("image_path")
+
+        # Read font_size and debug_save from HA entity states
+        ent_reg = er.async_get(hass)
+
+        def _state_by_unique_id(unique_id):
+            entry_obj = ent_reg.async_get_entity_id_from_unique_id(unique_id) if hasattr(ent_reg, "async_get_entity_id_from_unique_id") else None
+            if entry_obj is None:
+                # fallback: scan registry
+                for e in ent_reg.entities.values():
+                    if e.unique_id == unique_id:
+                        return hass.states.get(e.entity_id)
+            else:
+                return hass.states.get(entry_obj)
+            return None
+
+        fs_state = _state_by_unique_id(f"{entry.entry_id}_font_size")
+        font_size = int(float(fs_state.state)) if fs_state and fs_state.state not in ("unknown", "unavailable") else DEFAULT_FONT_SIZE
+
+        ds_state = _state_by_unique_id(f"{entry.entry_id}_debug_save")
+        debug_save = (ds_state.state == "on") if ds_state and ds_state.state not in ("unknown", "unavailable") else False
+
+        _LOGGER.info("font_size=%s debug_save=%s", font_size, debug_save)
 
         # ── Pick a random image ───────────────────────────────────────────────
         if not image_path:
@@ -72,6 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     os.path.join(folder, f)
                     for f in os.listdir(folder)
                     if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                    and not f.startswith("frame_")  # skip debug saves
                 ]
             images = await hass.async_add_executor_job(_list_images, media_folder)
             if not images:
@@ -87,8 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 now = dt_util.now()
                 end = now + timedelta(days=upcoming_days)
                 calendar_events = await hass.services.async_call(
-                    "calendar",
-                    "get_events",
+                    "calendar", "get_events",
                     {
                         "entity_id": calendar_entity,
                         "start_date_time": now.isoformat(),
@@ -100,6 +126,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raw = (calendar_events or {}).get(calendar_entity, {}).get("events", [])
                 for ev in raw:
                     start = ev.get("start")
+                    end_dt = ev.get("end")
                     if isinstance(start, str):
                         try:
                             start = datetime.fromisoformat(start)
@@ -108,12 +135,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                 start = date.fromisoformat(start)
                             except ValueError:
                                 continue
+                    if isinstance(end_dt, str):
+                        try:
+                            end_dt = datetime.fromisoformat(end_dt)
+                        except ValueError:
+                            try:
+                                end_dt = date.fromisoformat(end_dt)
+                            except ValueError:
+                                end_dt = None
                     if isinstance(start, datetime) and start.tzinfo is not None:
                         start = start.replace(tzinfo=None)
+                    if isinstance(end_dt, datetime) and end_dt is not None and end_dt.tzinfo is not None:
+                        end_dt = end_dt.replace(tzinfo=None)
+                    all_day = isinstance(start, date) and not isinstance(start, datetime)
                     events.append({
                         "summary": ev.get("summary", ""),
                         "start": start,
-                        "all_day": isinstance(start, date) and not isinstance(start, datetime),
+                        "end": end_dt,
+                        "all_day": all_day,
                     })
                 events.sort(key=lambda e: (
                     e["start"] if isinstance(e["start"], datetime)
@@ -126,21 +165,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # ── Compose overlay ───────────────────────────────────────────────────
         try:
             jpeg_bytes = await hass.async_add_executor_job(
-                compose_overlay, image_path, lang, events, opacity
+                compose_overlay, image_path, lang, events, opacity, font_size
             )
         except Exception as exc:
             _LOGGER.error("Failed to compose overlay: %s", exc)
             return
 
-        # ── Debug save ───────────────────────────────────────────────────────
+        # ── Update image entity ───────────────────────────────────────────────
+        image_entity = hass.data[DOMAIN].get(f"{entry.entry_id}_image_entity")
+        if image_entity:
+            await hass.async_add_executor_job(image_entity.update_image, jpeg_bytes)
+
+        # ── Debug save ────────────────────────────────────────────────────────
         if debug_save:
-            from datetime import datetime as _dt
-            ts = _dt.now().strftime("%d%m%Y%H%M%S")
+            ts = datetime.now().strftime("%d%m%Y%H%M%S")
             debug_path = os.path.join(media_folder, f"frame_{ts}.jpg")
             try:
                 with open(debug_path, "wb") as f:
                     f.write(jpeg_bytes)
-                _LOGGER.info("Debug image saved to %s", debug_path)
+                _LOGGER.info("Debug image saved: %s", debug_path)
             except Exception as exc:
                 _LOGGER.warning("Could not save debug image: %s", exc)
 
@@ -218,7 +261,6 @@ def _push_to_tv(tv_ip, token_file, jpeg_bytes, matte):
         outer = {"method": "ms.channel.emit", "params": {"data": json.dumps(inner), "to": "host", "event": "art_app_request"}}
         header = json.dumps(outer, separators=(",", ":")).encode("utf-8")
         payload = len(header).to_bytes(2, "big") + header + jpeg_bytes
-
         conn.send_binary(payload)
 
         data = _recv_until(conn, ["image_added", "error"])
@@ -247,6 +289,7 @@ def _push_to_tv(tv_ip, token_file, jpeg_bytes, matte):
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     hass.services.async_remove(DOMAIN, SERVICE_UPDATE)
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
