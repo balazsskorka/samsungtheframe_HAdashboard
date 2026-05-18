@@ -40,7 +40,7 @@ from .overlay import compose_overlay
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["button", "image", "number", "switch"]
+PLATFORMS = ["button", "image", "number", "select", "switch", "text"]
 
 SERVICE_UPDATE_SCHEMA = vol.Schema({
     vol.Optional("image_path"): cv.string,
@@ -64,7 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         lang            = config.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)
         upcoming_days   = int(config.get(CONF_UPCOMING_DAYS, DEFAULT_UPCOMING_DAYS))
         matte           = config.get(CONF_MATTE_COLOR, DEFAULT_MATTE_COLOR)
-        opacity         = int(config.get(CONF_OVERLAY_OPACITY, DEFAULT_OVERLAY_OPACITY))
+        opacity = int(config.get(CONF_OVERLAY_OPACITY, DEFAULT_OVERLAY_OPACITY))  # temporary, overridden below
         image_path      = call.data.get("image_path")
 
         # Read font_size and debug_save from HA entity states
@@ -87,7 +87,74 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ds_state = _state_by_unique_id(f"{entry.entry_id}_debug_save")
         debug_save = (ds_state.state == "on") if ds_state and ds_state.state not in ("unknown", "unavailable") else False
 
-        _LOGGER.info("font_size=%s debug_save=%s", font_size, debug_save)
+        show_date_state = _state_by_unique_id(f"{entry.entry_id}_show_date")
+        show_date = (show_date_state.state != "off") if show_date_state and show_date_state.state not in ("unknown", "unavailable") else True
+
+        show_cal_state = _state_by_unique_id(f"{entry.entry_id}_show_calendar")
+        show_calendar = (show_cal_state.state != "off") if show_cal_state and show_cal_state.state not in ("unknown", "unavailable") else True
+
+        lang_state = _state_by_unique_id(f"{entry.entry_id}_language")
+        if lang_state and lang_state.state not in ("unknown", "unavailable"):
+            from .const import LANGUAGES as _LANGS
+            lang = next((k for k, v in _LANGS.items() if v == lang_state.state), lang)
+
+        opacity_state = _state_by_unique_id(f"{entry.entry_id}_opacity")
+        opacity = int(float(opacity_state.state)) if opacity_state and opacity_state.state not in ("unknown", "unavailable") else int(config.get(CONF_OVERLAY_OPACITY, DEFAULT_OVERLAY_OPACITY))
+
+        # Folder path entity override
+        folder_state = _state_by_unique_id(f"{entry.entry_id}_folder_path")
+        if folder_state and folder_state.state not in ("unknown", "unavailable", ""):
+            media_folder = folder_state.state.strip() or media_folder
+
+        # Days to show entity override
+        days_state = _state_by_unique_id(f"{entry.entry_id}_days_to_show")
+        if days_state and days_state.state not in ("unknown", "unavailable"):
+            try:
+                upcoming_days = int(float(days_state.state))
+            except ValueError:
+                pass
+
+        # File name entity override
+        fname_state = _state_by_unique_id(f"{entry.entry_id}_file_name")
+        fname = fname_state.state.strip() if fname_state and fname_state.state not in ("unknown", "unavailable") else ""
+
+        # Weather entity
+        show_weather_state = _state_by_unique_id(f"{entry.entry_id}_show_weather")
+        show_weather = (show_weather_state.state != "off") if show_weather_state and show_weather_state.state not in ("unknown", "unavailable") else True
+
+        weather_ent_state = _state_by_unique_id(f"{entry.entry_id}_weather_entity")
+        weather_entity = weather_ent_state.state.strip() if weather_ent_state and weather_ent_state.state not in ("unknown", "unavailable", "none", "") else ""
+
+        _LOGGER.info("font_size=%s opacity=%s show_date=%s show_calendar=%s show_weather=%s days=%s folder=%s file=%s",
+                     font_size, opacity, show_date, show_calendar, show_weather, upcoming_days, media_folder, fname or "random")
+
+        # ── Resolve image path ────────────────────────────────────────────────
+        if not image_path:
+            if fname:
+                # Use specified file (relative to folder or absolute)
+                if os.path.isabs(fname):
+                    image_path = fname
+                else:
+                    image_path = os.path.join(media_folder, fname)
+                if not os.path.exists(image_path):
+                    _LOGGER.error("Specified file not found: %s", image_path)
+                    return
+            else:
+                def _list_images(folder):
+                    if not os.path.isdir(folder):
+                        return []
+                    return [
+                        os.path.join(folder, f)
+                        for f in os.listdir(folder)
+                        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                        and not f.startswith("frame_")
+                    ]
+                images = await hass.async_add_executor_job(_list_images, media_folder)
+                if not images:
+                    _LOGGER.error("No images found in %s", media_folder)
+                    return
+                image_path = random.choice(images)
+            _LOGGER.info("Selected image: %s", image_path)
 
         # ── Pick a random image ───────────────────────────────────────────────
         if not image_path:
@@ -112,7 +179,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if calendar_entity:
             try:
                 now = dt_util.now()
-                end = now + timedelta(days=upcoming_days)
+                # days=1 = today only, days=2 = today+tomorrow, etc.
+                end = dt_util.start_of_local_day(now) + timedelta(days=upcoming_days)
                 calendar_events = await hass.services.async_call(
                     "calendar", "get_events",
                     {
@@ -162,10 +230,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except Exception as exc:
                 _LOGGER.warning("Could not fetch calendar events: %s", exc)
 
+        # ── Fetch weather forecast ───────────────────────────────────────────
+        forecast = []
+        if show_weather and weather_entity:
+            try:
+                result = await hass.services.async_call(
+                    "weather", "get_forecasts",
+                    {"entity_id": weather_entity, "type": "daily"},
+                    blocking=True,
+                    return_response=True,
+                )
+                raw_fc = (result or {}).get(weather_entity, {}).get("forecast", [])
+                for fc in raw_fc[:upcoming_days]:
+                    forecast.append({
+                        "datetime": fc.get("datetime", ""),
+                        "condition": fc.get("condition", ""),
+                        "temperature": fc.get("temperature"),
+                        "templow": fc.get("templow"),
+                        "precipitation_probability": fc.get("precipitation_probability"),
+                    })
+                _LOGGER.info("Fetched %d forecast entries", len(forecast))
+            except Exception as exc:
+                _LOGGER.warning("Could not fetch weather forecast: %s", exc)
+
         # ── Compose overlay ───────────────────────────────────────────────────
         try:
             jpeg_bytes = await hass.async_add_executor_job(
-                compose_overlay, image_path, lang, events, opacity, font_size
+                compose_overlay, image_path, lang, events, opacity, font_size, show_date, show_calendar, show_weather, forecast
             )
         except Exception as exc:
             _LOGGER.error("Failed to compose overlay: %s", exc)
