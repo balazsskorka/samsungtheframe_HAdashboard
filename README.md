@@ -1,4 +1,4 @@
-# Samsung Frame Art
+# Samsung Frame Art 
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![GitHub release](https://img.shields.io/github/release/balazsskorka/samsungtheframe_HAdashboard.svg)](https://github.com/balazsskorka/samsungtheframe_HAdashboard/releases)
