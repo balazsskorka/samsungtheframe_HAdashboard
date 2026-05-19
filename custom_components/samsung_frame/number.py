@@ -64,7 +64,7 @@ class SamsungFrameOpacity(NumberEntity, RestoreEntity):
         self._attr_unique_id = f"{entry.entry_id}_opacity"
         self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)},
                                   "name": f"Samsung Frame ({entry.data.get('tv_ip', '')})"}
-        self._attr_native_value = 50.0
+        self._attr_native_value = 5.0
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -120,11 +120,11 @@ class SamsungFrameDaysToShow(NumberEntity, RestoreEntity):
 class SamsungFrameBrightness(NumberEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_name = "Art Mode Brightness"
-    _attr_native_min_value = 0
-    _attr_native_max_value = 100
-    _attr_native_step = 5
+    _attr_native_min_value = 1
+    _attr_native_max_value = 10
+    _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
-    _attr_native_unit_of_measurement = "%"
+    _attr_native_unit_of_measurement = ""
     _attr_icon = "mdi:brightness-6"
 
     def __init__(self, entry: ConfigEntry) -> None:
