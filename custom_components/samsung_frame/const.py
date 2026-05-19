@@ -44,17 +44,6 @@ MATTE_OPTIONS = [
 # Service names
 SERVICE_UPDATE = "update"
 
-# Overlay layout
-OVERLAY_HEIGHT_RATIO = 0.30   # bottom 30% of image
-OVERLAY_BLUR_RADIUS = 40
-OVERLAY_BG_ALPHA = 180        # 0-255
-
-# Font sizes (relative to image height)
-FONT_SIZE_DATE = 0.055
-FONT_SIZE_DAY = 0.038
-FONT_SIZE_EVENT = 0.028
-FONT_SIZE_EVENT_DATE = 0.022
-
 # Day/month translations
 DAYS = {
     "en": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],

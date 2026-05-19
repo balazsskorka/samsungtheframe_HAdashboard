@@ -26,13 +26,10 @@ from .const import (
     CONF_UPCOMING_DAYS,
     CONF_MATTE_COLOR,
     CONF_OVERLAY_OPACITY,
-    CONF_DEBUG_SAVE,
-    CONF_FONT_SIZE,
     DEFAULT_UPCOMING_DAYS,
     DEFAULT_MATTE_COLOR,
     DEFAULT_LANGUAGE,
     DEFAULT_OVERLAY_OPACITY,
-    DEFAULT_DEBUG_SAVE,
     DEFAULT_FONT_SIZE,
     SERVICE_UPDATE,
 )
@@ -164,24 +161,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _LOGGER.error("No images found in %s", media_folder)
                     return
                 image_path = random.choice(images)
-            _LOGGER.info("Selected image: %s", image_path)
-
-        # ── Pick a random image ───────────────────────────────────────────────
-        if not image_path:
-            def _list_images(folder):
-                if not os.path.isdir(folder):
-                    return []
-                return [
-                    os.path.join(folder, f)
-                    for f in os.listdir(folder)
-                    if f.lower().endswith((".jpg", ".jpeg", ".png"))
-                    and not f.startswith("frame_")  # skip debug saves
-                ]
-            images = await hass.async_add_executor_job(_list_images, media_folder)
-            if not images:
-                _LOGGER.error("No images found in %s", media_folder)
-                return
-            image_path = random.choice(images)
             _LOGGER.info("Selected image: %s", image_path)
 
         # ── Fetch calendar events ─────────────────────────────────────────────
