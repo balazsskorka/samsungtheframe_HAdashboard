@@ -29,7 +29,7 @@ A Home Assistant custom integration that pushes randomly selected images with an
 ## Installation via HACS
 
 1. In HACS, go to **Integrations → Custom Repositories**
-2. Add `https://github.com/YOUR_GITHUB_USERNAME/samsung_frame_art` as an **Integration**
+2. Add `https://github.com/balazsskorka/samsung_frame_art` as an **Integration**
 3. Search for **Samsung Frame Art** and install
 4. Restart Home Assistant
 5. Go to **Settings → Devices & Services → Add Integration** → search **Samsung Frame Art**
@@ -128,6 +128,12 @@ Tested on **Samsung The Frame 2019** (QE55LS03R). Should work on 2020 and newer 
 **Fonts look wrong:** DejaVu fonts are bundled in the integration — no system installation needed.
 
 **Weather icons not showing:** Make sure you have selected a weather entity with daily forecast support in the Weather Entity dropdown.
+
+---
+
+## Credits
+
+The WebSocket communication with the Samsung Frame TV — including the art mode channel handshake, token pairing, and binary frame upload protocol — is based on the excellent work by [@ollo69](https://github.com/ollo69) in the [ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart) repository. That integration provided the already-working WebSocket implementation that made 2019 Frame TV support possible.
 
 ---
 
