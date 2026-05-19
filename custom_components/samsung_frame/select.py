@@ -12,7 +12,7 @@ from .const import DOMAIN, DEFAULT_LANGUAGE, LANGUAGES
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([SamsungFrameLanguageSelect(entry), SamsungFrameWeatherSelect(entry)])
+    async_add_entities([SamsungFrameLanguageSelect(entry), SamsungFrameWeatherSelect(entry), SamsungFrameMatteTypeSelect(entry)])
 
 
 class SamsungFrameLanguageSelect(SelectEntity, RestoreEntity):
@@ -77,6 +77,34 @@ class SamsungFrameWeatherSelect(SelectEntity, RestoreEntity):
         if state and state.state in self._attr_options:
             self._attr_current_option = state.state
         self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+
+MATTE_TYPES = ["none", "modern", "shadowbox", "baroque"]
+
+class SamsungFrameMatteTypeSelect(SelectEntity, RestoreEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Digital Matte Type"
+    _attr_icon = "mdi:border-all"
+    _attr_options = MATTE_TYPES
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_matte_type"
+        self._attr_current_option = "none"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": f"Samsung Frame ({entry.data.get('tv_ip', '')})",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state and state.state in self._attr_options:
+            self._attr_current_option = state.state
 
     async def async_select_option(self, option: str) -> None:
         self._attr_current_option = option

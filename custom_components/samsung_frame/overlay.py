@@ -20,6 +20,24 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 _FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_ICONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_icons")
+_ICONS_PNG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_icons_png")
+
+
+def _load_weather_icon(condition: str, size: int, color: tuple = (255, 255, 255)) -> "Image.Image | None":
+    """Load a pre-rendered PNG weather icon and resize to requested size."""
+    try:
+        png_path = os.path.join(_ICONS_PNG_DIR, f"{condition}.png")
+        if not os.path.exists(png_path):
+            png_path = os.path.join(_ICONS_PNG_DIR, f"{condition.replace('-', '_')}.png")
+        if not os.path.exists(png_path):
+            _LOGGER.warning("No PNG icon found for condition: %s", condition)
+            return None
+        icon = Image.open(png_path).convert("RGBA")
+        return icon.resize((size, size), Image.LANCZOS)
+    except Exception as e:
+        _LOGGER.warning("Could not load weather icon %s: %s", condition, e)
+        return None
 
 FONT_PATHS_BOLD = [
     os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf"),
@@ -142,6 +160,65 @@ def _format_event_time(ev: dict, lang: str) -> str:
     return time_str
 
 
+def _hex_to_rgb(hex_color: str) -> tuple:
+    """Convert #RRGGBB or #RGB to (R, G, B)."""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2
+    try:
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        return (245, 240, 232)
+
+
+def _apply_digital_matte(img: Image.Image, matte_type: str, matte_color: str) -> Image.Image:
+    """
+    Shrink the image and add a colored border (passepartout) around it.
+
+    matte_type:
+      - modern:    flat uniform border, ~8% on all sides
+      - shadowbox: flat border + inner shadow on the artwork edge
+      - baroque:   wider top/sides, narrower bottom (classic museum proportions)
+    """
+    w, h = img.size
+    rgb = _hex_to_rgb(matte_color)
+
+    # Use a consistent pixel pad based on the shorter dimension (height)
+    # so the border looks visually equal on all 4 sides regardless of aspect ratio
+    if matte_type == "modern":
+        pad = int(h * 0.08)
+    elif matte_type == "shadowbox":
+        pad = int(h * 0.07)
+    elif matte_type == "baroque":
+        pad = int(h * 0.09)
+    else:
+        return img
+
+    art_w = w - 2 * pad
+    art_h = h - 2 * pad
+    art = img.resize((art_w, art_h), Image.LANCZOS)
+    canvas = Image.new("RGBA", (w, h), rgb + (255,))
+    canvas.paste(art, (pad, pad))
+    inner_x, inner_y = pad, pad
+
+    if matte_type == "shadowbox":
+        # Draw inner shadow around the artwork edge
+        shadow_draw = ImageDraw.Draw(canvas)
+        shadow_color = (0, 0, 0, 80)
+        shadow_width = max(6, int(w * 0.006))
+        for i in range(shadow_width):
+            factor = (shadow_width - i) / shadow_width
+            alpha = int(80 * factor)
+            shadow_draw.rectangle(
+                [inner_x + i, inner_y + i,
+                 inner_x + art_w - i, inner_y + art_h - i],
+                outline=(0, 0, 0, alpha),
+                width=1,
+            )
+
+    return canvas
+
+
 def compose_overlay(
     image_path: str,
     lang: str,
@@ -152,11 +229,18 @@ def compose_overlay(
     show_calendar: bool = True,
     show_weather: bool = True,
     forecast: list[dict] | None = None,
+    matte_type: str = "none",
+    matte_color: str = "#F5F0E8",
 ) -> bytes:
     """Compose image with overlay. opacity: 0-100, font_size: 50-200 (percent)."""
     img = Image.open(image_path).convert("RGBA")
     img = img.resize((3840, 2160), Image.LANCZOS)
     w, h = img.size
+
+    # ── Digital matte (passepartout border) ─────────────────────────────────
+    if matte_type and matte_type != "none":
+        img = _apply_digital_matte(img, matte_type, matte_color)
+        w, h = img.size
 
     bold_path    = _find_font(FONT_PATHS_BOLD)
     regular_path = _find_font(FONT_PATHS_REGULAR)
@@ -176,8 +260,8 @@ def compose_overlay(
     font_month_year  = _font(regular_path, fs_month_year)
     font_event_label = _font(regular_path, fs_event_label)
     font_event_title = _font(bold_path,    fs_event_title)
-    fs_weather_cond  = int(70  * scale)
-    fs_weather_temp  = int(80  * scale)
+    fs_weather_cond  = int(110 * scale)
+    fs_weather_temp  = int(130 * scale)
     font_weather_cond = _font(regular_path, fs_weather_cond)
     font_weather_temp = _font(bold_path,    fs_weather_temp)
 
@@ -187,7 +271,7 @@ def compose_overlay(
     radius   = 50
 
     left_w       = int(w * 0.38)
-    left_panel_h = int(h * 0.40) if not (show_weather and forecast) else int(h * 0.62)
+    left_panel_h = int(h * 0.40)   # always fixed height — weather goes beside date
     left_x       = margin
     left_y       = margin
 
@@ -219,70 +303,68 @@ def compose_overlay(
     day_num_str  = str(today.day)
     month_yr_str = f"{month_names[today.month - 1]} {today.year}"
 
-    left_cx = left_x + left_w // 2
+    # Date occupies left half of panel; forecast right half (when shown)
+    has_weather = show_date and show_weather and bool(forecast)
+    date_half_w = left_w // 2 if has_weather else left_w
+    date_cx = left_x + date_half_w // 2
+
     total_h = fs_day_name + 20 + fs_date_big + 20 + fs_month_year
     ty = left_y + (left_panel_h - total_h) // 2
 
     if show_date:
         tw, _ = _text_size(draw, day_name_str, font_day_name)
-        draw.text((left_cx - tw // 2, ty), day_name_str, font=font_day_name, fill=WHITE_DIM)
+        draw.text((date_cx - tw // 2, ty), day_name_str, font=font_day_name, fill=WHITE_DIM)
 
         ty += fs_day_name + 20
         tw, _ = _text_size(draw, day_num_str, font_date_big)
-        draw.text((left_cx - tw // 2, ty), day_num_str, font=font_date_big, fill=WHITE)
+        draw.text((date_cx - tw // 2, ty), day_num_str, font=font_date_big, fill=WHITE)
 
         ty += fs_date_big + 20
         tw, _ = _text_size(draw, month_yr_str, font_month_year)
-        draw.text((left_cx - tw // 2, ty), month_yr_str, font=font_month_year, fill=WHITE_DIM)
+        draw.text((date_cx - tw // 2, ty), month_yr_str, font=font_month_year, fill=WHITE_DIM)
 
-    # ── Weather forecast (below date in left panel) ─────────────────────────
-    if show_date and show_weather and forecast:
-        # Separator line
-        sep_y = left_y + int(left_panel_h * 0.48)
-        draw.line([(left_x + 40, sep_y), (left_x + left_w - 40, sep_y)], fill=WHITE_FAINT, width=2)
+    # ── Weather forecast (right half of left panel, today only) ──────────────
+    if has_weather:
+        fc = forecast[0]  # today only
+        condition = fc.get("condition", "")
 
-        fc_y = sep_y + int(h * 0.02)
-        fc_col_w = left_w // max(len(forecast), 1)
+        div_x = left_x + date_half_w
 
-        for i, fc in enumerate(forecast):
-            if i >= 5:
-                break
-            col_x = left_x + i * fc_col_w + fc_col_w // 2
+        # Right half center
+        fc_cx = div_x + (left_w - date_half_w) // 2
 
-            # Date label
-            try:
-                from datetime import datetime as _dt
-                dt_str = fc.get("datetime", "")
-                dt_obj = _dt.fromisoformat(dt_str.replace("Z", "+00:00")).replace(tzinfo=None)
-                fc_label = DAYS.get(lang, DAYS["en"])[dt_obj.weekday()][:3].upper()
-            except Exception:
-                fc_label = f"D{i+1}"
+        icon_size = int(left_panel_h * 0.38)
+        icon_img = _load_weather_icon(condition, icon_size)
 
-            tw, _ = _text_size(draw, fc_label, font_weather_cond)
-            draw.text((col_x - tw // 2, fc_y), fc_label, font=font_weather_cond, fill=WHITE_DIM)
+        # Stack: icon + temp + precip, vertically centered
+        temp_hi = fc.get("temperature")
+        temp_lo = fc.get("templow")
+        precip  = fc.get("precipitation_probability")
 
-            # Condition
-            cond = CONDITION_LABEL.get(fc.get("condition", ""), fc.get("condition", "").replace("-", " ").title())
-            cond = cond[:10]
-            tw, _ = _text_size(draw, cond, font_weather_cond)
-            draw.text((col_x - tw // 2, fc_y + fs_weather_cond + 8), cond, font=font_weather_cond, fill=WHITE_DIM)
+        temp_str   = f"{int(round(temp_hi))}°/{int(round(temp_lo))}°" if temp_hi is not None and temp_lo is not None else (f"{int(round(temp_hi))}°" if temp_hi is not None else "")
+        precip_str = f"{int(precip)}%" if precip is not None else ""
 
-            # Temperature
-            temp_hi = fc.get("temperature")
-            temp_lo = fc.get("templow")
-            if temp_hi is not None:
-                temp_str = f"{int(round(temp_hi))}°"
-                if temp_lo is not None:
-                    temp_str += f" / {int(round(temp_lo))}°"
-                tw, _ = _text_size(draw, temp_str, font_weather_temp)
-                draw.text((col_x - tw // 2, fc_y + fs_weather_cond * 2 + 16), temp_str, font=font_weather_temp, fill=WHITE)
+        block_h = icon_size + (fs_weather_temp + 8 if temp_str else 0) + (fs_weather_cond + 6 if precip_str else 0)
+        wy = left_y + (left_panel_h - block_h) // 2
 
-            # Precipitation probability
-            precip = fc.get("precipitation_probability")
-            if precip is not None:
-                precip_str = f"{int(precip)}%"
-                tw, _ = _text_size(draw, precip_str, font_weather_cond)
-                draw.text((col_x - tw // 2, fc_y + fs_weather_cond * 2 + 16 + fs_weather_temp + 8), precip_str, font=font_weather_cond, fill=WHITE_DIM)
+        if icon_img:
+            img.paste(icon_img, (fc_cx - icon_size // 2, wy), icon_img)
+            draw = ImageDraw.Draw(img)  # refresh after paste
+            wy += icon_size + 8
+        else:
+            cond_text = CONDITION_LABEL.get(condition, condition.replace("-", " ").title())
+            tw, _ = _text_size(draw, cond_text, font_weather_cond)
+            draw.text((fc_cx - tw // 2, wy), cond_text, font=font_weather_cond, fill=WHITE_DIM)
+            wy += fs_weather_cond + 8
+
+        if temp_str:
+            tw, _ = _text_size(draw, temp_str, font_weather_temp)
+            draw.text((fc_cx - tw // 2, wy), temp_str, font=font_weather_temp, fill=WHITE)
+            wy += fs_weather_temp + 6
+
+        if precip_str:
+            tw, _ = _text_size(draw, precip_str, font_weather_cond)
+            draw.text((fc_cx - tw // 2, wy), precip_str, font=font_weather_cond, fill=WHITE_DIM)
 
     # ── RIGHT: Events ─────────────────────────────────────────────────────────
     if show_calendar:

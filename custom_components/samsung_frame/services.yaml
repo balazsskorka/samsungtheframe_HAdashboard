@@ -9,3 +9,10 @@ update:
       example: /media/frame/my_photo.jpg
       selector:
         text:
+
+delete_all_tv_images:
+  name: Delete All TV Images
+  description: >
+    Queries the Samsung Frame TV for all user-uploaded images and deletes them
+    one by one. Useful for cleaning up the art library before pushing new content.
+  fields: {}

@@ -12,7 +12,7 @@ from .const import DOMAIN, DEFAULT_FONT_SIZE
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([SamsungFrameFontSize(entry), SamsungFrameOpacity(entry), SamsungFrameDaysToShow(entry)])
+    async_add_entities([SamsungFrameFontSize(entry), SamsungFrameOpacity(entry), SamsungFrameDaysToShow(entry), SamsungFrameBrightness(entry)])
 
 
 class SamsungFrameFontSize(NumberEntity, RestoreEntity):
@@ -114,4 +114,37 @@ class SamsungFrameDaysToShow(NumberEntity, RestoreEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         self._attr_native_value = float(int(value))
+        self.async_write_ha_state()
+
+
+class SamsungFrameBrightness(NumberEntity, RestoreEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Art Mode Brightness"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 5
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_unit_of_measurement = "%"
+    _attr_icon = "mdi:brightness-6"
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_brightness"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": f"Samsung Frame ({entry.data.get('tv_ip', '')})",
+        }
+        self._attr_native_value = 50.0
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        state = await self.async_get_last_state()
+        if state and state.state not in ("unknown", "unavailable"):
+            try:
+                self._attr_native_value = float(state.state)
+            except ValueError:
+                pass
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._attr_native_value = value
         self.async_write_ha_state()

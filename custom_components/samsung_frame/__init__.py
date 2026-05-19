@@ -98,6 +98,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             from .const import LANGUAGES as _LANGS
             lang = next((k for k, v in _LANGS.items() if v == lang_state.state), lang)
 
+        brightness_state = _state_by_unique_id(f"{entry.entry_id}_brightness")
+        brightness = int(float(brightness_state.state)) if brightness_state and brightness_state.state not in ("unknown", "unavailable") else 50
+
         opacity_state = _state_by_unique_id(f"{entry.entry_id}_opacity")
         opacity = int(float(opacity_state.state)) if opacity_state and opacity_state.state not in ("unknown", "unavailable") else int(config.get(CONF_OVERLAY_OPACITY, DEFAULT_OVERLAY_OPACITY))
 
@@ -113,6 +116,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 upcoming_days = int(float(days_state.state))
             except ValueError:
                 pass
+
+        # Digital matte type and color
+        matte_type_state = _state_by_unique_id(f"{entry.entry_id}_matte_type")
+        matte_type = matte_type_state.state if matte_type_state and matte_type_state.state not in ("unknown", "unavailable") else "none"
+
+        matte_color_state = _state_by_unique_id(f"{entry.entry_id}_matte_color")
+        matte_color = matte_color_state.state.strip() if matte_color_state and matte_color_state.state not in ("unknown", "unavailable") else "#F5F0E8"
 
         # File name entity override
         fname_state = _state_by_unique_id(f"{entry.entry_id}_file_name")
@@ -256,7 +266,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # ── Compose overlay ───────────────────────────────────────────────────
         try:
             jpeg_bytes = await hass.async_add_executor_job(
-                compose_overlay, image_path, lang, events, opacity, font_size, show_date, show_calendar, show_weather, forecast
+                compose_overlay, image_path, lang, events, opacity, font_size, show_date, show_calendar, show_weather, forecast, matte_type, matte_color
             )
         except Exception as exc:
             _LOGGER.error("Failed to compose overlay: %s", exc)
@@ -289,11 +299,141 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         _LOGGER.info("Successfully pushed art to Samsung Frame at %s", tv_ip)
 
+        # Set art mode brightness
+        try:
+            await hass.async_add_executor_job(_set_brightness, tv_ip, token_file, brightness)
+        except Exception as exc:
+            _LOGGER.warning("Could not set brightness: %s", exc)
+
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE, handle_update, schema=SERVICE_UPDATE_SCHEMA,
     )
+
+    async def handle_delete_all_images(call: ServiceCall) -> None:
+        """Query TV for all uploaded images and delete them one by one."""
+        config = {**entry.data, **entry.options}
+        tv_ip      = config[CONF_TV_IP]
+        token_file = config.get(CONF_TOKEN_FILE, "/config/samsung_frame_token.txt")
+        try:
+            deleted = await hass.async_add_executor_job(_delete_all_tv_images, tv_ip, token_file)
+            _LOGGER.info("Deleted %d images from Samsung Frame", deleted)
+        except Exception as exc:
+            _LOGGER.error("Failed to delete TV images: %s", exc)
+
+    hass.services.async_register(
+        DOMAIN, "delete_all_tv_images", handle_delete_all_images, schema=vol.Schema({})
+    )
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
+
+
+def _art_connect(tv_ip, token_file):
+    """Open and handshake the art WebSocket channel. Returns open conn."""
+    import websocket as ws_lib
+    name_b64 = base64.b64encode(b"SamsungTvRemote").decode("utf-8")
+    sslopt = {"cert_reqs": ssl.CERT_NONE}
+    token = ""
+    if token_file and os.path.exists(token_file):
+        try:
+            with open(token_file) as f:
+                token = f.readline().strip()
+        except Exception:
+            pass
+    art_url = f"wss://{tv_ip}:8002/api/v2/channels/com.samsung.art-app?name={name_b64}"
+    if token:
+        art_url += f"&token={token}"
+    conn = ws_lib.create_connection(art_url, timeout=10, sslopt=sslopt)
+    conn.settimeout(8)
+    for _ in range(10):
+        raw = conn.recv()
+        resp = json.loads(raw)
+        event = resp.get("event", "")
+        if event == "ms.channel.connect":
+            new_token = resp.get("data", {}).get("token")
+            if new_token and token_file:
+                with open(token_file, "w") as f:
+                    f.write(new_token)
+        elif event == "ms.channel.ready":
+            break
+    return conn
+
+
+def _send_art_request(conn, data: dict):
+    """Send an art_app_request over an open connection."""
+    conn.send(json.dumps({
+        "method": "ms.channel.emit",
+        "params": {
+            "event": "art_app_request",
+            "to": "host",
+            "data": json.dumps(data),
+        },
+    }))
+
+
+def _delete_all_tv_images(tv_ip: str, token_file: str) -> int:
+    """
+    Query the TV for all uploaded images in MY category and delete them one by one.
+    Returns the number of images deleted.
+    """
+    import time
+    conn = _art_connect(tv_ip, token_file)
+    deleted = 0
+    try:
+        # Request content list (category MY = user-uploaded images)
+        _send_art_request(conn, {"request": "get_content_list", "category": "MY"})
+
+        content_list = []
+        for _ in range(15):
+            try:
+                raw = conn.recv()
+            except Exception:
+                break
+            resp = json.loads(raw)
+            if resp.get("event") == "d2d_service_message":
+                data_str = resp.get("data", "{}")
+                data = json.loads(data_str) if isinstance(data_str, str) else data_str
+                if data.get("event") == "content_list":
+                    items = data.get("content_list", [])
+                    if isinstance(items, str):
+                        items = json.loads(items)
+                    content_list = items
+                    break
+
+        _LOGGER.info("Found %d images on TV to delete", len(content_list))
+
+        # Delete one by one
+        for item in content_list:
+            content_id = item.get("content_id") or item.get("id")
+            if not content_id:
+                continue
+            _LOGGER.info("Deleting content_id=%s", content_id)
+            _send_art_request(conn, {
+                "request": "delete_image_list",
+                "content_id_list": [{"content_id": content_id}],
+            })
+            # Brief pause between deletes to avoid overwhelming the TV
+            time.sleep(0.3)
+            deleted += 1
+
+    finally:
+        conn.close()
+    return deleted
+
+
+def _set_brightness(tv_ip: str, token_file: str, brightness: int) -> None:
+    """Set art mode brightness (0-100). May not be supported on all 2019 firmware."""
+    import time
+    conn = _art_connect(tv_ip, token_file)
+    try:
+        _send_art_request(conn, {
+            "request": "set_artmode_settings",
+            "brightness": brightness,
+        })
+        time.sleep(0.5)
+        _LOGGER.debug("Set art mode brightness to %d", brightness)
+    finally:
+        conn.close()
 
 
 def _recv_until(conn, sub_events, max_msgs=15):
@@ -313,39 +453,9 @@ def _recv_until(conn, sub_events, max_msgs=15):
 
 def _push_to_tv(tv_ip, token_file, jpeg_bytes, matte):
     """Push image using WebSocket binary frame (Art API 0.97 — 2019 Frame)."""
-    import websocket as ws_lib
     import time
-
-    name_b64 = base64.b64encode(b"SamsungTvRemote").decode("utf-8")
-    sslopt = {"cert_reqs": ssl.CERT_NONE}
-
-    token = ""
-    if token_file and os.path.exists(token_file):
-        try:
-            with open(token_file) as f:
-                token = f.readline().strip()
-        except Exception:
-            pass
-
-    art_url = f"wss://{tv_ip}:8002/api/v2/channels/com.samsung.art-app?name={name_b64}"
-    if token:
-        art_url += f"&token={token}"
-
-    conn = ws_lib.create_connection(art_url, timeout=10, sslopt=sslopt)
-    conn.settimeout(8)
-
+    conn = _art_connect(tv_ip, token_file)
     try:
-        for _ in range(10):
-            raw = conn.recv()
-            resp = json.loads(raw)
-            event = resp.get("event", "")
-            if event == "ms.channel.connect":
-                new_token = resp.get("data", {}).get("token")
-                if new_token and token_file:
-                    with open(token_file, "w") as f:
-                        f.write(new_token)
-            elif event == "ms.channel.ready":
-                break
 
         upload_id = str(uuid.uuid4())
         inner = {"request": "send_image", "file_type": "JPEG", "matte_id": matte or "none", "id": upload_id}
