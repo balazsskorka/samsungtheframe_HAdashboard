@@ -20,11 +20,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 _FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-_ICONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_icons")
 _ICONS_PNG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weather_icons_png")
 
 
-def _load_weather_icon(condition: str, size: int, color: tuple = (255, 255, 255)) -> "Image.Image | None":
+def _load_weather_icon(condition: str, size: int) -> "Image.Image | None":
     """Load a pre-rendered PNG weather icon and resize to requested size."""
     try:
         png_path = os.path.join(_ICONS_PNG_DIR, f"{condition}.png")
@@ -71,7 +70,6 @@ CONDITION_LABEL = {
     "sunny":                "Sunny",
     "windy":                "Windy",
     "windy-variant":        "Windy",
-    "exceptional":          "Special",
 }
 
 _EMOJI_RE = re.compile(

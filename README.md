@@ -1,7 +1,7 @@
 # Samsung Frame Art
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub release](https://img.shields.io/github/release/balazsskorka/samsungtheframe_HAdashboard.svg)](https://github.com/balazsskorka/samsungtheframe_HAdashboard/releases)
+[![GitHub release](https://img.shields.io/github/release/YOUR_GITHUB_USERNAME/samsung_frame_art.svg)](https://github.com/YOUR_GITHUB_USERNAME/samsung_frame_art/releases)
 
 A Home Assistant custom integration that pushes randomly selected images with an elegant overlay to your **Samsung The Frame TV** — including full support for the **2019 model**.
 
@@ -29,7 +29,7 @@ A Home Assistant custom integration that pushes randomly selected images with an
 ## Installation via HACS
 
 1. In HACS, go to **Integrations → Custom Repositories**
-2. Add `https://github.com/balazsskorka/samsungtheframe_HAdashboard` as an **Integration**
+2. Add `https://github.com/balazsskorka/samsung_frame_art` as an **Integration**
 3. Search for **Samsung Frame Art** and install
 4. Restart Home Assistant
 5. Go to **Settings → Devices & Services → Add Integration** → search **Samsung Frame Art**
